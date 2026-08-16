@@ -286,7 +286,16 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const { rawText } = req.body || {};
+    let body = req.body;
+    if (typeof body === 'string') {
+      try {
+        body = JSON.parse(body);
+      } catch (e) {
+        // body remains string
+      }
+    }
+
+    const rawText = (typeof body === 'object' && body !== null ? body.rawText : typeof body === 'string' ? body : '') || '';
 
     if (!rawText || typeof rawText !== 'string' || rawText.trim().length === 0) {
       return res.status(400).json({ error: 'Raw invoice text is required.' });
