@@ -1,0 +1,6 @@
+{
+  "name": "LedgerAI",
+  "description": "Production-quality AI Receipt & Invoice Parser for finance teams to extract, categorize, validate, and manage expense transactions into a running ledger.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
