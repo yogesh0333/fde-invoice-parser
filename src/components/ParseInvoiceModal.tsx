@@ -41,12 +41,12 @@ export const ParseInvoiceModal: React.FC<ParseInvoiceModalProps> = ({
   const [currentStepIndex, setCurrentStepIndex] = useState<number>(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeDemoId, setActiveDemoId] = useState<string | null>(null);
+  const [selectedTab, setSelectedTab] = useState<'all' | 'negative' | 'slack' | 'email' | 'receipt'>('all');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Reset state when modal opens
   useEffect(() => {
     if (isOpen && !rawText) {
-      // Default to Meta demo for quick trial if user wants
       setActiveDemoId(null);
     }
   }, [isOpen]);
@@ -69,6 +69,15 @@ export const ParseInvoiceModal: React.FC<ParseInvoiceModalProps> = ({
     setActiveDemoId(demo.id);
     setErrorMessage(null);
   };
+
+  const filteredDemos = DEMO_INVOICES.filter((demo) => {
+    if (selectedTab === 'all') return true;
+    if (selectedTab === 'negative') return demo.sourceType === 'negative';
+    if (selectedTab === 'slack') return demo.sourceType === 'slack';
+    if (selectedTab === 'email') return demo.sourceType === 'email';
+    if (selectedTab === 'receipt') return demo.sourceType === 'receipt' || demo.sourceType === 'conflict';
+    return true;
+  });
 
   const handleAnalyze = async () => {
     if (!rawText || !rawText.trim()) {
@@ -169,19 +178,44 @@ export const ParseInvoiceModal: React.FC<ParseInvoiceModalProps> = ({
 
         {/* Demo Invoices Quick Selectors */}
         <div className="mt-4">
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-700 mb-2">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs font-semibold text-slate-700 mb-2.5">
             <span className="flex items-center gap-1.5">
               <Zap className="h-3.5 w-3.5 text-amber-500" />
-              One-Click Demo Receipts for Testing:
+              <span>Test Scenarios & Input Sources:</span>
             </span>
-            <span className="text-[11px] text-slate-400 font-normal">
-              Click any invoice to autofill
-            </span>
+
+            {/* Filter Pills */}
+            <div className="flex items-center gap-1 overflow-x-auto pb-1 sm:pb-0">
+              {[
+                { id: 'all', label: 'All Sources' },
+                { id: 'negative', label: 'Negative / Non-Invoice' },
+                { id: 'slack', label: 'Slack Drops' },
+                { id: 'email', label: 'Email Forwards' },
+                { id: 'receipt', label: 'Invoices & Receipts' },
+              ].map((tab) => {
+                const isActive = selectedTab === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setSelectedTab(tab.id as any)}
+                    className={`whitespace-nowrap rounded-md px-2.5 py-1 text-[11px] font-medium transition-all ${
+                      isActive
+                        ? 'bg-slate-900 text-white shadow-xs'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200/80 hover:text-slate-900'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {DEMO_INVOICES.map((demo) => {
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 max-h-[140px] overflow-y-auto pr-1">
+            {filteredDemos.map((demo) => {
               const isSelected = activeDemoId === demo.id;
+              const isNegative = demo.sourceType === 'negative';
               return (
                 <button
                   key={demo.id}
@@ -189,19 +223,29 @@ export const ParseInvoiceModal: React.FC<ParseInvoiceModalProps> = ({
                   onClick={() => handleSelectDemo(demo)}
                   className={`flex flex-col items-start rounded-lg border p-2 text-left transition-all ${
                     isSelected
-                      ? 'border-indigo-600 bg-indigo-50/70 ring-2 ring-indigo-500/20'
+                      ? 'border-indigo-600 bg-indigo-50/80 ring-2 ring-indigo-500/20'
+                      : isNegative
+                      ? 'border-red-200/80 bg-red-50/40 hover:border-red-300 hover:bg-red-50/80'
+                      : demo.sourceType === 'slack'
+                      ? 'border-purple-200/80 bg-purple-50/40 hover:border-purple-300 hover:bg-purple-50/80'
+                      : demo.sourceType === 'email'
+                      ? 'border-sky-200/80 bg-sky-50/40 hover:border-sky-300 hover:bg-sky-50/80'
                       : 'border-slate-200 bg-slate-50/70 hover:border-slate-300 hover:bg-white'
                   }`}
                 >
-                  <div className="flex w-full items-center justify-between">
+                  <div className="flex w-full items-center justify-between gap-1">
                     <span className="font-semibold text-xs text-slate-900 truncate">
                       {demo.title}
                     </span>
-                    {demo.isAmbiguous && (
-                      <span className="rounded bg-amber-100 px-1 py-0.2 text-[9px] font-bold text-amber-800">
-                        Ambiguous
+                    {demo.isAmbiguous ? (
+                      <span className="rounded bg-amber-100 px-1 py-0.2 text-[9px] font-bold text-amber-800 shrink-0">
+                        Flag
                       </span>
-                    )}
+                    ) : isNegative ? (
+                      <span className="rounded bg-red-100 px-1 py-0.2 text-[9px] font-bold text-red-800 shrink-0">
+                        Reject
+                      </span>
+                    ) : null}
                   </div>
                   <span className="mt-0.5 text-[10px] text-slate-500 truncate w-full">
                     {demo.badge}

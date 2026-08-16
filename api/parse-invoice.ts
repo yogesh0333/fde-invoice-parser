@@ -1,32 +1,17 @@
-import express, { Request, Response } from 'express';
-import path from 'path';
-import { createServer as createViteServer } from 'vite';
-import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
 
-dotenv.config();
+interface RequestLike {
+  method?: string;
+  body?: any;
+  headers?: Record<string, string | string[] | undefined>;
+}
 
-const app = express();
-const PORT = 3000;
-
-app.use(express.json({ limit: '10mb' }));
-
-// Initialize GoogleGenAI
-const getAI = () => {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    console.warn('GEMINI_API_KEY not found in environment. Fallback heuristics will be available.');
-    return null;
-  }
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
-};
+interface ResponseLike {
+  setHeader(name: string, value: string): this;
+  status(code: number): this;
+  json(body: any): void;
+  end(): void;
+}
 
 const CANONICAL_CATEGORIES = [
   'Marketing & Advertising',
@@ -46,7 +31,6 @@ const CANONICAL_CATEGORIES = [
   'Miscellaneous',
 ];
 
-// Fallback heuristic parser in case of offline/network issues or demo resilience
 function fallbackHeuristicParse(rawText: string) {
   const text = rawText.trim();
   const lower = text.toLowerCase();
@@ -285,22 +269,42 @@ function fallbackHeuristicParse(rawText: string) {
   };
 }
 
-// Parse Invoice API Endpoint
-app.post('/api/parse-invoice', async (req: Request, res: Response) => {
+export default async function handler(req: any, res: any) {
+  // Enable CORS if needed
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
+
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method Not Allowed. Use POST.' });
+  }
+
   try {
-    const { rawText } = req.body;
+    const { rawText } = req.body || {};
 
     if (!rawText || typeof rawText !== 'string' || rawText.trim().length === 0) {
-      return res.status(400).json({
-        error: 'Raw invoice text is required.',
-      });
+      return res.status(400).json({ error: 'Raw invoice text is required.' });
     }
 
     const text = rawText.trim();
-    const ai = getAI();
+    const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
 
-    // If Gemini is available, run prompt with structured schema
-    if (ai) {
+    if (apiKey) {
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+
       const systemInstruction = `You are a specialized financial document extraction and bookkeeping engine for finance teams (D2C accounting).
 Analyze receipts, invoices, OCR scans, emails, or Slack expense messages and return strictly structured JSON.
 Financial accuracy is paramount. Never hallucinate or invent financial values. If a field cannot be determined with certainty, return null.
@@ -322,7 +326,7 @@ If the document contains conflicting total figures (e.g. Total: ₹23,600 and Am
 - set confidence: 0.72
 
 Identify:
-- vendor: clean name of merchant/seller (not the customer, shipping carrier, bank, or payment gateway unless they are the actual merchant)
+- vendor: clean name of merchant/seller (not customer, shipping carrier, bank, or payment gateway unless they are the actual merchant)
 - transactionDate: normalized to YYYY-MM-DD (e.g., 02/08/26 becomes 2026-08-02, August 3, 2026 becomes 2026-08-03, 08 Aug 2026 becomes 2026-08-08)
 - invoiceNumber: official invoice/receipt identifier or null
 - subtotal: net taxable/base amount (number or null)
@@ -372,15 +376,15 @@ Identify:
             responseSchema: {
               type: Type.OBJECT,
               properties: {
-                vendor: { type: Type.STRING, description: 'Merchant or service provider name or null' },
+                vendor: { type: Type.STRING, description: 'Merchant name or null' },
                 transactionDate: { type: Type.STRING, description: 'Date in YYYY-MM-DD format or null' },
                 invoiceNumber: { type: Type.STRING, description: 'Invoice number or null' },
-                subtotal: { type: Type.NUMBER, description: 'Subtotal or base amount before tax' },
+                subtotal: { type: Type.NUMBER, description: 'Subtotal or base amount' },
                 taxAmount: { type: Type.NUMBER, description: 'Tax or GST/VAT amount' },
                 totalAmount: { type: Type.NUMBER, description: 'Grand total payable amount' },
-                currency: { type: Type.STRING, description: '3-letter currency code, e.g. INR or USD' },
+                currency: { type: Type.STRING, description: '3-letter currency code' },
                 category: { type: Type.STRING, description: 'One of the 15 canonical expense categories' },
-                categoryReason: { type: Type.STRING, description: 'One concise sentence explaining category choice' },
+                categoryReason: { type: Type.STRING, description: 'Explanation for category choice' },
                 confidence: { type: Type.NUMBER, description: 'Overall confidence between 0.0 and 1.0' },
                 fieldConfidences: {
                   type: Type.OBJECT,
@@ -411,12 +415,11 @@ Identify:
         const rawJson = response.text?.trim() || '';
         const parsed = JSON.parse(rawJson);
 
-        // Sanitize category against canonical list
         if (!CANONICAL_CATEGORIES.includes(parsed.category)) {
           parsed.category = 'Miscellaneous';
         }
 
-        return res.json({
+        return res.status(200).json({
           success: true,
           data: {
             ...parsed,
@@ -425,23 +428,21 @@ Identify:
           source: 'gemini-3.7-flash',
         });
       } catch (geminiError: any) {
-        console.error('Gemini API call error:', geminiError?.message || geminiError);
-        // Seamless fallback to heuristic parser if Gemini encountered an error
+        console.error('Gemini extraction error:', geminiError?.message || geminiError);
         const fallback = fallbackHeuristicParse(text);
-        return res.json({
+        return res.status(200).json({
           success: true,
           data: {
             ...fallback,
             rawText: text,
           },
           source: 'fallback_engine',
-          warning: 'Generated via fallback rule engine due to AI model response latency.',
+          warning: 'Processed via resilient fallback engine.',
         });
       }
     } else {
-      // Fallback if no key provided
       const fallback = fallbackHeuristicParse(text);
-      return res.json({
+      return res.status(200).json({
         success: true,
         data: {
           ...fallback,
@@ -450,43 +451,11 @@ Identify:
         source: 'fallback_engine',
       });
     }
-  } catch (error: any) {
-    console.error('Server parse error:', error);
-    res.status(500).json({
-      error: 'An error occurred while parsing the invoice.',
-      details: error?.message,
+  } catch (err: any) {
+    console.error('API Handler Error:', err);
+    return res.status(500).json({
+      error: 'An error occurred during invoice extraction.',
+      details: err?.message,
     });
   }
-});
-
-// Health check API
-app.get('/api/health', (req: Request, res: Response) => {
-  res.json({
-    status: 'ok',
-    service: 'LedgerAI Backend',
-    timestamp: new Date().toISOString(),
-  });
-});
-
-// Start Server with Vite Middleware
-async function start() {
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req: Request, res: Response) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
-  }
-
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`LedgerAI server listening on http://0.0.0.0:${PORT}`);
-  });
 }
-
-start();
